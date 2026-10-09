@@ -192,10 +192,12 @@ public class LimboSessionHandlerImpl implements MinecraftSessionHandler {
       }
       this.chatSession.thenRunAsync(() -> {
         this.player.getConnection().write(StartUpdatePacket.INSTANCE);
+        this.plugin.guardConfigTransition(this.player.getConnection());
         this.configTransition.thenRun(this::disconnected).thenRun(runnable);
       }, this.player.getConnection().eventLoop());
     } else {
       this.player.getConnection().write(StartUpdatePacket.INSTANCE);
+      this.plugin.guardConfigTransition(this.player.getConnection());
       this.configTransition.thenRun(this::disconnected).thenRun(runnable);
     }
   }

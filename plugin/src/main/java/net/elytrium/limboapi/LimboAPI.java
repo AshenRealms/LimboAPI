@@ -44,6 +44,7 @@ import com.velocitypowered.proxy.protocol.netty.MinecraftCompressorAndLengthEnco
 import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
 import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
 import com.velocitypowered.proxy.protocol.netty.MinecraftVarintLengthEncoder;
+import com.velocitypowered.proxy.protocol.netty.PlayPacketQueueOutboundHandler;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelPipeline;
@@ -443,9 +444,44 @@ public class LimboAPI implements LimboFactory {
     }
   }
 
+  /**
+   * Must be called right after StartUpdatePacket has been written to a 1.20.2+ client.
+   *
+   * <p>From that packet on the client is in the CONFIG state and disconnects on any PLAY packet
+   * ("Received unknown packet id"), but the proxy only switches once the client acknowledges.
+   * Other plugins that send PLAY packets through the Velocity API in that window, or during the
+   * configuration that follows (tab list header and footer, player info, boss bars), would kick
+   * the player. Velocity closes the window in ConnectedPlayer#switchToConfigState by switching
+   * the encoder to CONFIG and queueing PLAY packets until the connection is in a play state again;
+   * this does the same.
+   *
+   * <p>While a player is in a limbo, packets are encoded by the prepared packet encoder, which
+   * sits behind Velocity's own queue handler in the pipeline. The queue therefore has to be
+   * placed in front of that encoder, otherwise it never sees the packets.
+   */
+  public void guardConfigTransition(MinecraftConnection connection) {
+    ChannelPipeline pipeline = connection.getChannel().pipeline();
+
+    MinecraftEncoder encoder = pipeline.get(MinecraftEncoder.class);
+    if (encoder != null) {
+      encoder.setState(StateRegistry.CONFIG);
+    }
+    this.setEncoderState(connection, StateRegistry.CONFIG);
+
+    if (pipeline.get(Connections.PLAY_PACKET_QUEUE_OUTBOUND) == null) {
+      String anchor = pipeline.get(PreparedPacketFactory.PREPARED_ENCODER) != null
+          ? PreparedPacketFactory.PREPARED_ENCODER : Connections.MINECRAFT_ENCODER;
+      if (pipeline.get(anchor) != null) {
+        pipeline.addAfter(anchor, Connections.PLAY_PACKET_QUEUE_OUTBOUND,
+            new PlayPacketQueueOutboundHandler(connection.getProtocolVersion(), ProtocolUtils.Direction.CLIENTBOUND));
+      }
+    }
+  }
+
   public void setState(MinecraftConnection connection, StateRegistry stateRegistry) {
-    connection.setState(stateRegistry);
+    // The encoder first: leaving CONFIG releases the queued PLAY packets, which are encoded right away.
     this.setEncoderState(connection, stateRegistry);
+    connection.setState(stateRegistry);
     this.fixDecoderState(connection, stateRegistry);
   }
 
