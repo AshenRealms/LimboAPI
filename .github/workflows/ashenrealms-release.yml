@@ -1,0 +1,54 @@
+# AshenRealms fork: builds the plugin and publishes it as a GitHub release
+# when a tag like 1.1.27-ashenrealms.1 is pushed. Releases are referenced by
+# URL and checksum from AshenRealms/minecraft-infrastructure, so a tag is
+# never moved or reused.
+#
+# The upstream workflows (build.yml, release.yml) are left untouched so this
+# branch stays easy to rebase; they only run for the master branch.
+name: AshenRealms release
+
+on:
+  push:
+    tags:
+      - "*-ashenrealms.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+      - name: Set up JDK
+        uses: actions/setup-java@v4.7.0
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: Cache generated data
+        uses: actions/cache@v5.0.4
+        with:
+          path: |
+            plugin/build/minecraft/
+            plugin/build/generated/minecraft/mapping/
+          key: minecraft-${{ hashFiles('gradle.properties') }}
+      - name: Build LimboAPI
+        run: ./gradlew build
+      - name: Find the plugin jar
+        id: jar
+        run: |
+          jar="$(find plugin/build/libs -type f -name '*.jar' ! -name '*-javadoc.jar' ! -name '*-sources.jar')"
+          echo "path=$jar" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$jar" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Publish the release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ${{ steps.jar.outputs.path }}
+          name: ${{ github.ref_name }}
+          body: |
+            LimboAPI ${{ github.ref_name }}: upstream LimboAPI plus the AshenRealms fixes on the `ashenrealms` branch.
+
+            SHA-256 of the jar: `${{ steps.jar.outputs.sha256 }}`
+
+            Source: https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}
